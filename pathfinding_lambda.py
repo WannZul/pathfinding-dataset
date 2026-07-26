@@ -1,3 +1,4 @@
+import heapq
 import json
 import re
 from collections import deque
@@ -7,6 +8,13 @@ DIRECTIONS = [
     (1, 0, "down"),
     (0, -1, "left"),
     (0, 1, "right"),
+]
+
+COINS_FIRST_DIRECTIONS = [
+    (1, 0, "down"),
+    (0, -1, "left"),
+    (0, 1, "right"),
+    (-1, 0, "up"),
 ]
 
 MOVE_DELTAS = {
@@ -133,6 +141,93 @@ def _bfs(board, start, goal, blocked):
 
     return None
 
+def _coins_first_route(board, start, goal, blocked):
+    """Find a DLRU route minimizing c8 entries, then steps."""
+    rows = len(board)
+    columns = len(board[0])
+
+    # The direction tuple makes equal-cost routes deterministic according to
+    # the coins-first strategy's down/left/right/up preference.
+    queue = [
+        (0, 0, (), start[0], start[1], [])
+    ]
+    best = {
+        start: (0, 0, ())
+    }
+
+    while queue:
+        (
+            c8_entries,
+            steps,
+            direction_key,
+            row,
+            column,
+            path,
+        ) = heapq.heappop(queue)
+
+        position = (row, column)
+
+        if best.get(position) != (
+            c8_entries,
+            steps,
+            direction_key,
+        ):
+            continue
+
+        if position == goal:
+            return path
+
+        for (
+            direction_index,
+            (row_change, column_change, move),
+        ) in enumerate(COINS_FIRST_DIRECTIONS):
+            next_row = row + row_change
+            next_column = column + column_change
+            next_position = (next_row, next_column)
+
+            if not (
+                0 <= next_row < rows
+                and 0 <= next_column < columns
+            ):
+                continue
+
+            next_cell = _cell(
+                board,
+                next_row,
+                next_column,
+            )
+
+            if next_cell in blocked:
+                continue
+
+            next_cost = (
+                c8_entries + (next_cell == "c8"),
+                steps + 1,
+                direction_key + (direction_index,),
+            )
+
+            if (
+                next_position in best
+                and best[next_position] <= next_cost
+            ):
+                continue
+
+            best[next_position] = next_cost
+
+            heapq.heappush(
+                queue,
+                (
+                    next_cost[0],
+                    next_cost[1],
+                    next_cost[2],
+                    next_row,
+                    next_column,
+                    path + [move],
+                ),
+            )
+
+    return None
+
 def _nearest(board, start, target_test, blocked):
     """Find the nearest reachable cell matching target_test."""
     rows = len(board)
@@ -226,54 +321,88 @@ def swift_path(board, start, treasure):
     ) or []
 
 def get_coins_path(board, start, treasure):
-    """Collect reachable c7 coins safely, then enter treasure."""
+    """Collect snapshotted coins, challenges, and finally treasure."""
     working_board = [
         row[:]
         for row in board
     ]
 
+    coins = []
+    challenges = []
+
+    for row, cells in enumerate(working_board):
+        for column, cell in enumerate(cells):
+            normalized_cell = str(cell).lower().strip()
+            target_position = (row, column)
+
+            if normalized_cell == "c7":
+                coins.append(target_position)
+            elif normalized_cell in {
+                "c1",
+                "c2",
+                "c3",
+                "c4",
+                "c5",
+                "c6",
+            }:
+                challenges.append(target_position)
+
     position = start
     complete_path = []
 
-    maximum_iterations = (
-        len(working_board)
-        * len(working_board[0])
+    def collect(targets, row_major_after_unreachable=False):
+        nonlocal position
+        use_row_major_order = False
+
+        while targets:
+            if use_row_major_order:
+                target = targets[0]
+            else:
+                target = min(
+                    targets,
+                    key=lambda candidate: (
+                        abs(candidate[0] - position[0])
+                        + abs(candidate[1] - position[1])
+                    ),
+                )
+
+            targets.remove(target)
+
+            path = _coins_first_route(
+                working_board,
+                position,
+                target,
+                {
+                    "wall",
+                    "treasure",
+                },
+            )
+
+            if path is None:
+                if row_major_after_unreachable:
+                    use_row_major_order = True
+                continue
+
+            complete_path.extend(path)
+            position, _ = _walk_and_clear(
+                working_board,
+                position,
+                path,
+            )
+
+    # Coordinates remain scheduled even when a route crosses and clears them.
+    collect(coins)
+
+    collect(
+        challenges,
+        row_major_after_unreachable=True,
     )
 
-    for _ in range(maximum_iterations):
-        target = _nearest(
-            working_board,
-            position,
-            lambda cell: cell == "c7",
-            {
-                "wall",
-                "c8",
-                "treasure",
-                "c30",
-            },
-        )
-
-        if not target:
-            break
-
-        path, _ = target
-        complete_path.extend(path)
-
-        position, _ = _walk_and_clear(
-            working_board,
-            position,
-            path,
-        )
-
-    final_path = _bfs(
+    final_path = _coins_first_route(
         working_board,
         position,
         treasure,
-        {
-            "wall",
-            "c8",
-            "c30",
-        },
+        {"wall"},
     )
 
     if final_path is not None:
@@ -632,7 +761,6 @@ def lambda_handler(event, context):
             "start_position": list(
                 start_position
             ),
-            "strategy": strategy,
         }
 
         print(
