@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 import boto3
 
 
-PATHFINDING_FUNCTION_NAME = "AgentCoreGatewayTool-Pathfinding_1196"
+PATHFINDING_FUNCTION_NAME = "AgentCoreGatewayTool-Pathfinding"
 lambda_client = boto3.client("lambda", region_name="us-east-1")
 
 
@@ -105,8 +105,9 @@ def extract_text_signals(response: str) -> Dict[str, bool]:
 
     lower = response.lower()
     signals["mentions_tool_name"] = "pathfinding_lambda" in lower
-    signals["mentions_strategy"] = (
-        "quickest" in lower or "coins_first" in lower
+    signals["mentions_strategy"] = any(
+        strategy in lower
+        for strategy in ("quickest", "coins_first", "score_hunter")
     )
     signals["mentions_params"] = (
         "game_map" in lower or "start_pos" in lower

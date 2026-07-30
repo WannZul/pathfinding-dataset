@@ -17,6 +17,12 @@ COINS_FIRST_DIRECTIONS = [
     (-1, 0, "up"),
 ]
 
+DOOR_KEYS = {
+    "c30": "c40",
+    "c31": "c41",
+}
+KEY_CELLS = set(DOOR_KEYS.values())
+
 MOVE_DELTAS = {
     "up": (-1, 0),
     "down": (1, 0),
@@ -228,6 +234,163 @@ def _coins_first_route(board, start, goal, blocked):
 
     return None
 
+def _safe_components(board):
+    """Map every non-wall, non-spike position to a safe component ID."""
+    rows = len(board)
+    columns = len(board[0])
+    components = {}
+    component_id = 0
+
+    for row in range(rows):
+        for column in range(columns):
+            position = (row, column)
+            if position in components:
+                continue
+            if _cell(board, row, column) in {"wall", "c8"}:
+                continue
+
+            queue = deque([position])
+            components[position] = component_id
+
+            while queue:
+                current_row, current_column = queue.popleft()
+                for row_change, column_change, _ in DIRECTIONS:
+                    next_position = (
+                        current_row + row_change,
+                        current_column + column_change,
+                    )
+                    next_row, next_column = next_position
+
+                    if not (
+                        0 <= next_row < rows
+                        and 0 <= next_column < columns
+                    ):
+                        continue
+                    if next_position in components:
+                        continue
+                    if _cell(board, next_row, next_column) in {
+                        "wall",
+                        "c8",
+                    }:
+                        continue
+
+                    components[next_position] = component_id
+                    queue.append(next_position)
+
+            component_id += 1
+
+    return components
+
+
+def _nearest_reward_route(
+    board,
+    start,
+    target_test,
+    blocked,
+    components=None,
+    preferred_component=None,
+):
+    """Choose a reward route by spikes, preferred component, then length."""
+    rows = len(board)
+    columns = len(board[0])
+
+    queue = [
+        (0, 0, (), start[0], start[1], [])
+    ]
+    best = {
+        start: (0, 0, ())
+    }
+    candidates = []
+
+    while queue:
+        (
+            spike_entries,
+            steps,
+            direction_key,
+            row,
+            column,
+            path,
+        ) = heapq.heappop(queue)
+
+        position = (row, column)
+        if best.get(position) != (
+            spike_entries,
+            steps,
+            direction_key,
+        ):
+            continue
+
+        current_cell = _cell(board, row, column)
+        if position != start and target_test(current_cell):
+            component_priority = 1
+            if (
+                components is not None
+                and preferred_component is not None
+                and components.get(position) == preferred_component
+            ):
+                component_priority = 0
+
+            candidates.append(
+                (
+                    spike_entries,
+                    component_priority,
+                    steps,
+                    direction_key,
+                    path,
+                    position,
+                )
+            )
+
+        for (
+            direction_index,
+            (row_change, column_change, move),
+        ) in enumerate(COINS_FIRST_DIRECTIONS):
+            next_row = row + row_change
+            next_column = column + column_change
+            next_position = (next_row, next_column)
+
+            if not (
+                0 <= next_row < rows
+                and 0 <= next_column < columns
+            ):
+                continue
+
+            next_cell = _cell(board, next_row, next_column)
+            if next_cell in blocked:
+                continue
+
+            next_cost = (
+                spike_entries + (next_cell == "c8"),
+                steps + 1,
+                direction_key + (direction_index,),
+            )
+
+            if (
+                next_position in best
+                and best[next_position] <= next_cost
+            ):
+                continue
+
+            best[next_position] = next_cost
+            heapq.heappush(
+                queue,
+                (
+                    next_cost[0],
+                    next_cost[1],
+                    next_cost[2],
+                    next_row,
+                    next_column,
+                    path + [move],
+                ),
+            )
+
+    if not candidates:
+        return None
+
+    best_candidate = min(candidates)
+    return best_candidate[4], best_candidate[5]
+
+
 def _nearest(board, start, target_test, blocked):
     """Find the nearest reachable cell matching target_test."""
     rows = len(board)
@@ -287,9 +450,9 @@ def _nearest(board, start, target_test, blocked):
     return None
 
 def _walk_and_clear(board, start, path):
-    """Apply a path and clear rewards crossed along the route."""
+    """Apply a path, clear crossed rewards, and report collected keys."""
     row, column = start
-    found_key = False
+    collected_keys = set()
 
     for move in path:
         row_change, column_change = MOVE_DELTAS[move]
@@ -303,21 +466,25 @@ def _walk_and_clear(board, start, path):
             column,
         )
 
-        if current_cell == "c40":
-            found_key = True
+        if current_cell in KEY_CELLS:
+            collected_keys.add(current_cell)
 
         if _is_reward(current_cell):
             board[row][column] = "normal"
 
-    return (row, column), found_key
+    return (row, column), collected_keys
 
 def swift_path(board, start, treasure):
-    """Take the shortest route to treasure."""
-    return _bfs(
+    """Take the safest shortest route, crossing spikes only when required."""
+    return _coins_first_route(
         board,
         start,
         treasure,
-        {"wall"},
+        {
+            "wall",
+            "c30",
+            "c31",
+        },
     ) or []
 
 def get_coins_path(board, start, treasure):
@@ -374,6 +541,8 @@ def get_coins_path(board, start, treasure):
                 target,
                 {
                     "wall",
+                    "c30",
+                    "c31",
                     "treasure",
                 },
             )
@@ -411,12 +580,7 @@ def get_coins_path(board, start, treasure):
     return complete_path
 
 def score_hunter_path(board, start, treasure):
-    """
-    Collect every safe challenge and coin.
-
-    Spikes and treasure stay blocked during collection. The red door stays
-    blocked until the red key has been collected. Treasure is entered last.
-    """
+    """Collect safe rewards, unlock keyed doors, and enter treasure last."""
     working_board = [
         row[:]
         for row in board
@@ -424,21 +588,16 @@ def score_hunter_path(board, start, treasure):
 
     position = start
     complete_path = []
-
-    have_key = (
-        _cell(
-            working_board,
-            position[0],
-            position[1],
-        )
-        == "c40"
-    )
+    collected_keys = set()
 
     starting_cell = _cell(
         working_board,
         position[0],
         position[1],
     )
+
+    if starting_cell in KEY_CELLS:
+        collected_keys.add(starting_cell)
 
     if _is_reward(starting_cell):
         working_board[
@@ -450,24 +609,32 @@ def score_hunter_path(board, start, treasure):
     maximum_iterations = (
         len(working_board)
         * len(working_board[0])
-        * 2
+        * 4
     )
+    components = _safe_components(working_board)
+    preferred_component = components.get(treasure)
 
-    # Collect every reward reachable without crossing the red door.
+    # Recompute locked doors after every collected key. This supports red and
+    # green key/door pairs independently and remains extensible to more pairs.
     for _ in range(maximum_iterations):
-        target = _nearest(
+        blocked = {
+            "wall",
+            "treasure",
+        }
+
+        blocked.update(
+            door
+            for door, required_key in DOOR_KEYS.items()
+            if required_key not in collected_keys
+        )
+
+        target = _nearest_reward_route(
             working_board,
             position,
-            lambda cell: (
-                _is_reward(cell)
-                and cell != "c30"
-            ),
-            {
-                "wall",
-                "c8",
-                "treasure",
-                "c30",
-            },
+            _is_reward,
+            blocked,
+            components=components,
+            preferred_component=preferred_component,
         )
 
         if not target:
@@ -476,89 +643,25 @@ def score_hunter_path(board, start, treasure):
         path, _ = target
         complete_path.extend(path)
 
-        position, found_key = _walk_and_clear(
+        position, found_keys = _walk_and_clear(
             working_board,
             position,
             path,
         )
+        collected_keys.update(found_keys)
 
-        have_key = have_key or found_key
-
-    # Open every reachable red door after obtaining the key.
-    door_opened = False
-
-    if have_key:
-        for _ in range(maximum_iterations):
-            target = _nearest(
-                working_board,
-                position,
-                lambda cell: cell == "c30",
-                {
-                    "wall",
-                    "c8",
-                    "treasure",
-                },
-            )
-
-            if not target:
-                break
-
-            path, _ = target
-            complete_path.extend(path)
-
-            position, _ = _walk_and_clear(
-                working_board,
-                position,
-                path,
-            )
-
-            door_opened = True
-
-    # Collect rewards behind the door and any remaining rewards.
-    collection_blocks = {
-        "wall",
-        "c8",
-        "treasure",
-    }
-
-    if not door_opened:
-        collection_blocks.add("c30")
-
-    for _ in range(maximum_iterations):
-        target = _nearest(
-            working_board,
-            position,
-            lambda cell: (
-                _is_reward(cell)
-                and cell != "c30"
-            ),
-            collection_blocks,
-        )
-
-        if not target:
-            break
-
-        path, _ = target
-        complete_path.extend(path)
-
-        position, found_key = _walk_and_clear(
-            working_board,
-            position,
-            path,
-        )
-
-        have_key = have_key or found_key
-
-    # Enter treasure only after no safe reward remains.
+    # Treasure remains last. Locked doors remain blocked, while unavoidable
+    # spikes are minimized before path length.
     final_blocks = {
         "wall",
-        "c8",
     }
+    final_blocks.update(
+        door
+        for door, required_key in DOOR_KEYS.items()
+        if required_key not in collected_keys
+    )
 
-    if not door_opened:
-        final_blocks.add("c30")
-
-    final_path = _bfs(
+    final_path = _coins_first_route(
         working_board,
         position,
         treasure,
