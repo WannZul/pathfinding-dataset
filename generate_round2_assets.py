@@ -20,6 +20,8 @@ TOOL_TRAIN_OUTPUT = ROOT / "round2-training-dataset.jsonl"
 TOOL_VALIDATION_OUTPUT = ROOT / "round2-validation-dataset.jsonl"
 FAITHFULNESS_TRAIN_OUTPUT = ROOT / "round2-faithfulness-training.jsonl"
 FAITHFULNESS_VALIDATION_OUTPUT = ROOT / "round2-faithfulness-validation.jsonl"
+COMBINED_TRAIN_OUTPUT = ROOT / "round2-combined-training.jsonl"
+COMBINED_VALIDATION_OUTPUT = ROOT / "round2-combined-validation.jsonl"
 
 TOOL_SYSTEM_PROMPT = """Output ONLY a tool call to find a safe path on the map:
 
@@ -472,6 +474,75 @@ def choose_faithfulness_records(
     ]
 
 
+def choose_nonoverlapping_faithfulness_records(
+    records: Sequence[Dict[str, Any]],
+    training_records: Sequence[Dict[str, Any]],
+    size: int,
+) -> List[Dict[str, Any]]:
+    """Choose unique validation relay prompts absent from mixed training."""
+    blocked = {
+        record["prompt"][1]["content"]
+        for record in training_records
+    }
+    candidates: List[Tuple[int, Dict[str, Any]]] = []
+    seen = set(blocked)
+
+    for record in records:
+        ground_truth = json.loads(record["reward_model"]["ground_truth"])
+        output = result_body(ground_truth["output"])
+        path = output.get("path", [])
+        if not path or len(path) > 250:
+            continue
+        prompt = (
+            "Return this tool output exactly:\n"
+            + json.dumps(
+                {
+                    "path": path,
+                    "steps": output.get("steps", 0),
+                    "start_position": output.get("start_position", []),
+                },
+                separators=(",", ":"),
+            )
+        )
+        if prompt in seen:
+            continue
+        seen.add(prompt)
+        candidates.append((len(path), record))
+
+    candidates.sort(key=lambda item: item[0])
+    if len(candidates) < size:
+        raise RuntimeError(
+            f"Only {len(candidates)} non-overlapping validation records for {size} requested"
+        )
+
+    step = len(candidates) / size
+    selected = [candidates[int(offset * step)][1] for offset in range(size)]
+    return [
+        build_faithfulness_record(record, index, "validation")
+        for index, record in enumerate(selected)
+    ]
+
+
+def interleave_records(
+    primary: Sequence[Dict[str, Any]],
+    secondary: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Deterministically distribute both abilities throughout a mixed split."""
+    mixed: List[Dict[str, Any]] = []
+    primary_index = 0
+    secondary_index = 0
+
+    while primary_index < len(primary) or secondary_index < len(secondary):
+        if primary_index < len(primary):
+            mixed.append(primary[primary_index])
+            primary_index += 1
+        if secondary_index < len(secondary):
+            mixed.append(secondary[secondary_index])
+            secondary_index += 1
+
+    return mixed
+
+
 def main() -> None:
     train_source = load_jsonl(TOOL_TRAIN_SOURCE)
     validation_source = load_jsonl(TOOL_VALIDATION_SOURCE)
@@ -484,17 +555,31 @@ def main() -> None:
         81,
         "validation",
     )
+    combined_train = interleave_records(tool_train, faithfulness_train)
+    combined_faithfulness_validation = choose_nonoverlapping_faithfulness_records(
+        tool_validation,
+        faithfulness_train,
+        81,
+    )
+    combined_validation = interleave_records(
+        tool_validation,
+        combined_faithfulness_validation,
+    )
 
     write_jsonl(TOOL_TRAIN_OUTPUT, tool_train)
     write_jsonl(TOOL_VALIDATION_OUTPUT, tool_validation)
     write_jsonl(FAITHFULNESS_TRAIN_OUTPUT, faithfulness_train)
     write_jsonl(FAITHFULNESS_VALIDATION_OUTPUT, faithfulness_validation)
+    write_jsonl(COMBINED_TRAIN_OUTPUT, combined_train)
+    write_jsonl(COMBINED_VALIDATION_OUTPUT, combined_validation)
 
     for path, records in (
         (TOOL_TRAIN_OUTPUT, tool_train),
         (TOOL_VALIDATION_OUTPUT, tool_validation),
         (FAITHFULNESS_TRAIN_OUTPUT, faithfulness_train),
         (FAITHFULNESS_VALIDATION_OUTPUT, faithfulness_validation),
+        (COMBINED_TRAIN_OUTPUT, combined_train),
+        (COMBINED_VALIDATION_OUTPUT, combined_validation),
     ):
         print(f"{path.name}: {len(records)}")
 
