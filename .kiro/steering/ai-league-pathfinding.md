@@ -82,9 +82,9 @@ Act as a candid project partner. Say directly when an approach is wrong, explain
 
 - `c41`: green key, +50. Must be collected before `c31`; memory provides unlock information and the agent must say `Thanks` when receiving the key.
 - `c31`: green door, +1000 and -5 lives if mishandled. Requires the green key, then translates received letters to their alphabet positions.
-- `c17`: distraction chest, +50 and -2 lives. It is economically harmful: -500 life bonus plus +50 reward yields -450 net before token/risk costs, so avoid it unless later rules prove it mandatory.
+- `c17`: distraction chest, +50; an incorrect answer costs 2 lives. Collect it only when the supervisor can answer accurately and concisely.
 - Existing red key/door mechanics remain and must track independently from green key/door state.
-- Spikes remain blocked hazards.
+- Spikes are hazards. Minimize entries globally; the exact Round 2 map forces three crossings because of its start isolation and cross-component key/door dependencies.
 
 ### Round 2 visible map facts
 
@@ -95,7 +95,7 @@ Act as a candid project partner. Say directly when an approach is wrong, explain
 - Green door: D8.
 - Red key: A10.
 - Red door: E1.
-- Distraction chest: B8; avoid.
+- Distraction chest: B8; collect with a concise accurate answer.
 - The map includes approximately 30 visible coins plus multiple ordinary challenges and spike cells.
 - Never hardcode this map or its path in prompts/Lambda code. Use it only as a test case for generic semantics.
 
@@ -103,7 +103,7 @@ Act as a candid project partner. Say directly when an approach is wrong, explain
 
 - Extend the path planner to track red and green keys separately.
 - Block `c30` until `c40` is collected and block `c31` until `c41` is collected.
-- Treat `c17` and `c8` as avoid-only hazards for score-maximizing routes.
+- Treat `c17` as a low-value answerable reward and `c8` as a globally minimized traversal cost.
 - Collect keys, safe challenges, doors, and coins before entering treasure.
 - Update tool schemas and generated datasets to include `c17`, `c31`, `c41` and generic multi-key semantics.
 - Exact Round 1 challenge text/point/life rules for all unchanged challenge IDs still need to be reconfirmed from the current Round 2 Challenges tab before final prompt changes.

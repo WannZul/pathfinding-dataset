@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 import boto3
 
 
-PATHFINDING_FUNCTION_NAME = "REPLACE_WITH_ROUND2_PATHFINDING_FUNCTION_NAME"
+PATHFINDING_FUNCTION_NAME = "AgentCoreGatewayTool-Pathfinding"
 lambda_client = boto3.client("lambda", region_name="us-east-1")
 
 

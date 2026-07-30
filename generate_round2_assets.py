@@ -32,8 +32,9 @@ TOOL_DESCRIPTION = (
     "'quickest' finds the shortest safe route to treasure; 'coins_first' "
     "collects coins and standard challenges before treasure; 'score_hunter' "
     "collects all reachable rewards, obtains red key c40 before red door c30, "
-    "obtains green key c41 before green door c31, avoids spike c8, and enters "
-    "treasure last. Cells may include start, normal, wall, treasure, c1-c8, "
+    "obtains green key c41 before green door c31, minimizes spike c8 "
+    "crossings, and enters treasure last. Cells may include start, normal, "
+    "wall, treasure, c1-c8, "
     "c17, c30, c31, c40, and c41."
 )
 
@@ -111,8 +112,8 @@ def reaches_treasure(arguments: Dict[str, Any], result: Dict[str, Any]) -> bool:
     if not path:
         return start == find_treasure(board)
 
-    final_position, _, crossed_cells = trace_path(board, start, path)
-    return final_position == find_treasure(board) and "c8" not in crossed_cells
+    final_position, _, _ = trace_path(board, start, path)
+    return final_position == find_treasure(board)
 
 
 def base_score_hunter_positions(
