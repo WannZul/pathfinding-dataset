@@ -381,27 +381,57 @@ def reward_function(sample: Dict[str, Any], index: int) -> Dict[str, Any]:
     }
 
 
-# Keep SageMaker Studio's generated handler unchanged.
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """AWS Lambda Handler for reward function."""
+    """AWS Lambda Handler with SageMaker Studio test-wrapper support."""
     try:
-        batch = event.get("input", event) if isinstance(event, dict) else event
-        if "batch" in event:
-            batch = event.get("batch", [])
-        elif "body" in event:
-            body = json.loads(event.get("body", "{}"))
-            batch = body.get("batch", [])
+        # Studio's test dialog may JSON-encode the event or input twice.
+        if isinstance(event, str):
+            event = json.loads(event)
 
-        if not batch:
+        if isinstance(event, dict):
+            if "batch" in event:
+                batch = event.get("batch", [])
+            elif "body" in event:
+                body = event.get("body", {})
+                if isinstance(body, str):
+                    body = json.loads(body)
+
+                if isinstance(body, dict):
+                    batch = body.get("batch", body.get("input", body))
+                else:
+                    batch = body
+            else:
+                batch = event.get("input", event)
+        else:
+            batch = event
+
+        if isinstance(batch, str):
+            batch = json.loads(batch)
+
+        # Also accept a nested wrapper or one direct sample object.
+        if isinstance(batch, dict):
+            batch = batch.get("batch", batch.get("input", [batch]))
+
+        if isinstance(batch, str):
+            batch = json.loads(batch)
+
+        if not isinstance(batch, list) or not batch:
             return {"error": "Missing or empty batch"}
 
         results = []
         for i, sample in enumerate(batch):
-            try:
-                result = reward_function(sample, i)
-                results.append(result)
-            except Exception as error:
-                return {"error": str(error)}
+            if isinstance(sample, str):
+                sample = json.loads(sample)
+
+            if not isinstance(sample, dict):
+                return {
+                    "error": (
+                        "Each batch item must be an object; "
+                        f"received {type(sample).__name__}"
+                    )
+                }
+
+            results.append(reward_function(sample, i))
 
         return {
             "statusCode": 200,
