@@ -17,6 +17,12 @@ COINS_FIRST_DIRECTIONS = [
     (-1, 0, "up"),
 ]
 
+DOOR_KEYS = {
+    "c30": "c40",
+    "c31": "c41",
+}
+KEY_CELLS = set(DOOR_KEYS.values())
+
 MOVE_DELTAS = {
     "up": (-1, 0),
     "down": (1, 0),
@@ -287,9 +293,9 @@ def _nearest(board, start, target_test, blocked):
     return None
 
 def _walk_and_clear(board, start, path):
-    """Apply a path and clear rewards crossed along the route."""
+    """Apply a path, clear crossed rewards, and report collected keys."""
     row, column = start
-    found_key = False
+    collected_keys = set()
 
     for move in path:
         row_change, column_change = MOVE_DELTAS[move]
@@ -303,21 +309,26 @@ def _walk_and_clear(board, start, path):
             column,
         )
 
-        if current_cell == "c40":
-            found_key = True
+        if current_cell in KEY_CELLS:
+            collected_keys.add(current_cell)
 
         if _is_reward(current_cell):
             board[row][column] = "normal"
 
-    return (row, column), found_key
+    return (row, column), collected_keys
 
 def swift_path(board, start, treasure):
-    """Take the shortest route to treasure."""
+    """Take the shortest safe route to treasure without crossing hazards."""
     return _bfs(
         board,
         start,
         treasure,
-        {"wall"},
+        {
+            "wall",
+            "c8",
+            "c30",
+            "c31",
+        },
     ) or []
 
 def get_coins_path(board, start, treasure):
@@ -374,6 +385,9 @@ def get_coins_path(board, start, treasure):
                 target,
                 {
                     "wall",
+                    "c8",
+                    "c30",
+                    "c31",
                     "treasure",
                 },
             )
@@ -411,12 +425,7 @@ def get_coins_path(board, start, treasure):
     return complete_path
 
 def score_hunter_path(board, start, treasure):
-    """
-    Collect every safe challenge and coin.
-
-    Spikes and treasure stay blocked during collection. The red door stays
-    blocked until the red key has been collected. Treasure is entered last.
-    """
+    """Collect safe rewards, unlock keyed doors, and enter treasure last."""
     working_board = [
         row[:]
         for row in board
@@ -424,21 +433,16 @@ def score_hunter_path(board, start, treasure):
 
     position = start
     complete_path = []
-
-    have_key = (
-        _cell(
-            working_board,
-            position[0],
-            position[1],
-        )
-        == "c40"
-    )
+    collected_keys = set()
 
     starting_cell = _cell(
         working_board,
         position[0],
         position[1],
     )
+
+    if starting_cell in KEY_CELLS:
+        collected_keys.add(starting_cell)
 
     if _is_reward(starting_cell):
         working_board[
@@ -450,24 +454,29 @@ def score_hunter_path(board, start, treasure):
     maximum_iterations = (
         len(working_board)
         * len(working_board[0])
-        * 2
+        * 4
     )
 
-    # Collect every reward reachable without crossing the red door.
+    # Recompute locked doors after every collected key. This supports red and
+    # green key/door pairs independently and remains extensible to more pairs.
     for _ in range(maximum_iterations):
+        blocked = {
+            "wall",
+            "c8",
+            "treasure",
+        }
+
+        blocked.update(
+            door
+            for door, required_key in DOOR_KEYS.items()
+            if required_key not in collected_keys
+        )
+
         target = _nearest(
             working_board,
             position,
-            lambda cell: (
-                _is_reward(cell)
-                and cell != "c30"
-            ),
-            {
-                "wall",
-                "c8",
-                "treasure",
-                "c30",
-            },
+            _is_reward,
+            blocked,
         )
 
         if not target:
@@ -476,87 +485,24 @@ def score_hunter_path(board, start, treasure):
         path, _ = target
         complete_path.extend(path)
 
-        position, found_key = _walk_and_clear(
+        position, found_keys = _walk_and_clear(
             working_board,
             position,
             path,
         )
+        collected_keys.update(found_keys)
 
-        have_key = have_key or found_key
-
-    # Open every reachable red door after obtaining the key.
-    door_opened = False
-
-    if have_key:
-        for _ in range(maximum_iterations):
-            target = _nearest(
-                working_board,
-                position,
-                lambda cell: cell == "c30",
-                {
-                    "wall",
-                    "c8",
-                    "treasure",
-                },
-            )
-
-            if not target:
-                break
-
-            path, _ = target
-            complete_path.extend(path)
-
-            position, _ = _walk_and_clear(
-                working_board,
-                position,
-                path,
-            )
-
-            door_opened = True
-
-    # Collect rewards behind the door and any remaining rewards.
-    collection_blocks = {
-        "wall",
-        "c8",
-        "treasure",
-    }
-
-    if not door_opened:
-        collection_blocks.add("c30")
-
-    for _ in range(maximum_iterations):
-        target = _nearest(
-            working_board,
-            position,
-            lambda cell: (
-                _is_reward(cell)
-                and cell != "c30"
-            ),
-            collection_blocks,
-        )
-
-        if not target:
-            break
-
-        path, _ = target
-        complete_path.extend(path)
-
-        position, found_key = _walk_and_clear(
-            working_board,
-            position,
-            path,
-        )
-
-        have_key = have_key or found_key
-
-    # Enter treasure only after no safe reward remains.
+    # Treasure remains last, and any door whose key was never found remains
+    # blocked. Distraction c17 is safe to visit; only spike c8 is avoided.
     final_blocks = {
         "wall",
         "c8",
     }
-
-    if not door_opened:
-        final_blocks.add("c30")
+    final_blocks.update(
+        door
+        for door, required_key in DOOR_KEYS.items()
+        if required_key not in collected_keys
+    )
 
     final_path = _bfs(
         working_board,
